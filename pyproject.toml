@@ -1,0 +1,24 @@
+[build-system]
+requires      = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name            = "FreeAPI"
+version         = "0.1.0"
+description     = "Bridge the gap between web-based AI and local applications"
+
+requires-python = ">=3.10"
+dependencies    = [
+    "aiohttp>=3.9",
+    "playwright>=1.45",
+    "wasmtime>=24.0",
+    "json-repair>=0.30",
+]
+
+[project.scripts]
+FreeAPI-Browser-Chat = "FreeAPI.ChatBrowser:main"
+
+[tool.setuptools.packages.find]
+where      = ["."]
+include    = ["FreeAPI", "FreeAPI.*"]
+namespaces = false

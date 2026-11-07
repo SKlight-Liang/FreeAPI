@@ -73,6 +73,55 @@ class DeepSeekBrowserClient:
             self._Page = await Context.new_page()
 
         return self._Page
+    
+    # Wait until the chat interface is fully loaded and ready for interaction.
+    # Here we give users enough time to complete the login process 
+    # and ensure that the chat input is available.
+    async def WaitForAuthentication(self, Page, ReadyTimeout = 60):
+        # Use a loop to repeatedly check for the URL and the presence of the input selector 
+        # to determine whether the chat interface is ready.
+        InputSelector = 'textarea[autocomplete="off"]'
+        # Get the current event loop to run the waiting logic.
+        Loop          = asyncio.get_running_loop()
+        Deadline      = Loop.time() + ReadyTimeout
+
+        LoginDetected = False
+        LoginNotified = False
+
+        while True:
+            # If the page is closed, raise an error to indicate that the browser page was closed.
+            if Page.is_closed():
+                raise RuntimeError("DeepSeek browser page was closed while waiting for login")
+
+            # Check the current URL of the page to determine whether it is on the login page.
+            CurrentURL = Page.url
+            if (CurrentURL.startswith("https://chat.deepseek.com/sign_in")
+                or CurrentURL.startswith("https://chat.deepseek.com/sign_up")):
+                LoginDetected = True
+                # If it is the first time detecting the login page,
+                # we should notify the user to complete the login process.
+                if not LoginNotified:
+                    print("SYSTEM > Please log in to DeepSeek Chat in the browser window.")
+                    print("SYSTEM > Waiting for authentication...")
+                    LoginNotified = True
+            # Check if the chat input selector is present on the page,
+            # which indicates that the chat interface is ready for interaction.
+            InputElements = Page.locator(InputSelector).first
+            if await InputElements.is_visible() and await InputElements.is_enabled():
+                if LoginNotified:
+                    print("SYSTEM > Authentication successful. Chat interface is ready.")
+                return
+
+            # Check if the waiting time has exceeded the specified timeout.
+            if not LoginDetected and Loop.time() > Deadline:
+                raise RuntimeError(
+                    f"DeepSeek chat interface was not ready within {ReadyTimeout}s "
+                    f"(current URL: {CurrentURL})"
+                )
+
+            # Wait for a short duration before checking again to avoid busy waiting.
+            await asyncio.sleep(0.5)
+
 
     # Switch the browser to a specific chat session and extract the session ID from the resulting URL.
     # This method uses a lock to ensure that only one session switch operation could be performed at a time, 
@@ -113,6 +162,9 @@ class DeepSeekBrowserClient:
 
         # Wait for a short duration to ensure the page is fully stabilized
         await Page.wait_for_timeout(1000)
+        # Login redirects must be finished before attempting to access the chat input.
+        # Otherwise, the ChatCompletions() method may fail to capture the input area.
+        await self.WaitForAuthentication(Page)
 
         # Extract the session ID from the final URL if it contains the expected path
         if "/a/chat/s/" in Page.url:

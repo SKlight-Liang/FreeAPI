@@ -18,6 +18,31 @@ from .DeepSeekStreamParser import *
 
 from playwright.async_api import async_playwright
 
+# FEATURE: We optimize the resource recovery algorithm to ensure that 
+# the browser process could be terminated properly in most cases. Here
+# we use an elegant tow-stage termination strategy to ensure that the 
+# browser process has been terminated gracefully and forcefully if necessary.
+async def StopBrowserProcess(Process):
+    # If the process is None or has already exited, return immediately.
+    if Process is None or Process.poll() is not None:
+        return
+
+    # First, attempt to terminate the process gracefully.
+    Process.terminate()
+
+    try:
+        # Wait for the process to exit within 5 seconds.
+        await asyncio.wait_for(asyncio.to_thread(Process.wait), timeout = 5)
+        return
+    except asyncio.TimeoutError:
+        pass
+
+    # If the process is still running after the timeout, forcefully kill it.
+    if Process.poll() is None:
+        Process.kill()
+
+    await asyncio.to_thread(Process.wait)
+
 # Parse command-line arguments and run the browser-backed chat workflow.
 # Keep the original initialization order and cleanup boundaries unchanged.
 # It realizes multiple rounds of dialogue with the model in an asynchronous manner.
@@ -31,6 +56,8 @@ async def _Main():
     Parser.add_argument("-i", "--interactive", action = "store_true")
     # Delete: a flag to delete the chat session after completion.
     Parser.add_argument("-d", "--delete", action = "store_true")
+    # CDPPort: an optional port number for the browser's CDP debugger.
+    Parser.add_argument("-p", "--port", type = int, default = DEFAULT_CDP_PORT)
     # UserDataDir: an optional path to specify the browser's user data directory.
     Parser.add_argument("--user-data-dir")
 
@@ -40,7 +67,8 @@ async def _Main():
     Process, URL, _ = await LaunchChromeforDebugging(
         UserDataDir = Arguments.user_data_dir,
         Headless    = False,
-        Detached    = True
+        Detached    = True,
+        CDPPort     = Arguments.port
     )
     # Start Playwright and connect to the browser over CDP.
     Playwright = await async_playwright().start()
@@ -63,7 +91,7 @@ async def _Main():
             # If there is no ready-made message, 
             # read a line from standard input and remove the leading and trailing blanks.
             if not Message:
-                Message = input("YOU> ").strip()
+                Message = input("YOU > ").strip()
                 # If the input is empty, continue to the next iteration and wait for input again.
                 if not Message:
                     continue
@@ -88,9 +116,9 @@ async def _Main():
 
             # If the thinking content is present, print it to standard error.
             if Result["thinking"]:
-                print("THINKING> " + Result["thinking"], file = sys.stderr)
+                print("THINKING >\n" + Result["thinking"], file = sys.stderr)
             # Print the formal reply to standard output.
-            print("REPLY> " + Result["text"])
+            print("REPLY >\n" + Result["text"])
 
             # Update the parent message identifier for the next request.
             ParentMessageID = Result["message_id"]
@@ -113,11 +141,16 @@ async def _Main():
         # Close the browser and stop Playwright in the original sequence.
         try:
             await Browser.close()
+        except Exception:
+            pass
+
+        try:
             await Playwright.stop()
-        finally:
-            # If the browser process is still running, terminate it to free resources.
-            if Process.poll() is None:
-                Process.terminate()
+        except Exception:
+            pass
+
+        # If the browser process is still running, terminate it to free resources.
+        await StopBrowserProcess(Process)
             
 # Synchronous entry point for callers of the command-line module.
 def main():

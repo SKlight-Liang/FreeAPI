@@ -9,10 +9,15 @@ description     = "Bridge the gap between web-based AI and local applications"
 
 requires-python = ">=3.12"
 dependencies    = [
-    "aiohttp>=3.9",
-    "playwright>=1.45",
-    "wasmtime>=24.0",
-    "json-repair>=0.30",
+    "aiohttp>=3.14",
+    "playwright>=1.63",
+    "wasmtime>=49.0",
+    "json-repair>=0.63"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.1"
 ]
 
 [project.scripts]
@@ -23,3 +28,6 @@ FreeAPI-Auth = "FreeAPISrc.DeepSeekAuth:main"
 where      = ["."]
 include    = ["FreeAPISrc", "FreeAPISrc.*"]
 namespaces = false
+
+[tool.setuptools.package-data]
+FreeAPISrc = ["resources/*.wasm"]

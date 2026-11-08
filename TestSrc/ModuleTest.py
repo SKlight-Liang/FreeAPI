@@ -1,7 +1,16 @@
+
+import json
+import base64
+import struct
+import importlib
+
+from pytest import MonkeyPatch
+
 from FreeAPISrc.Utils import *
 from FreeAPISrc.Normalize import *
 from FreeAPISrc.ToolPrompt import *
 from FreeAPISrc.DeepSeekStreamParser import *
+from FreeAPISrc.DeepSeekWebClient import *
 
 # Tests for utility functions in the Utils module.
 def ResponseIDTest():
@@ -73,12 +82,101 @@ def ResponseNormalizeTest():
     assert Normalized["session_id"] is None
     assert Normalized["parent_message_id"] is None
 
+# Tests for the DeepSeekWebClient class.
+def WASMTIMEEnginePipelineTest(monkeypatch):
+    Calls = {}
+
+    class Engine: pass
+    class Store: 
+        def __init__(self, Engine): 
+            Calls['store_engine'] = Engine
+    class Memory:
+        def __init__(self): 
+            self.Buffer = bytearray(4096)
+        def write(self, Store, Data, Pointer):
+            self.Buffer[Pointer : Pointer + len(Data)] = Data
+        def read(self, Store, Start, End):
+            return bytes(self.Buffer[Start : End])
+
+    TestMemory = Memory()
+    
+    class Func:
+        def __init__(self, Kind): 
+            self.Kind = Kind
+        def __call__(self, Store, *Args):
+            if self.Kind == 'alloc': 
+                return 128
+            if self.Kind == 'stack': 
+                return 256 if Args[0] == -16 else 0
+            if self.Kind == 'solve':
+                Ret                                   = Args[0]
+                TestMemory.Buffer[Ret : Ret + 4]      = struct.pack('<i', 1)
+                TestMemory.Buffer[Ret + 8 : Ret + 16] = struct.pack('<d', 42.0)
+    class Module:
+        @classmethod
+        def from_file(cls, Engine, Path): 
+            Calls['module_engine'] = Engine
+            Calls['path']          = Path
+            return cls()
+    class Exports(dict):
+        def __iter__(self): 
+            return super().__iter__()
+    class Instance:
+        def __init__(self, Store, Module, Imports): pass
+        def exports(self, Store):
+            return Exports(
+                memory                          = TestMemory, 
+                __wbindgen_export_0             = Func('alloc'), 
+                __wbindgen_add_to_stack_pointer = Func('stack'), 
+                wasm_solve                      = Func('solve')
+            )
+
+    ClientModule = importlib.import_module(DeepSeekWebClient.__module__)
+    monkeypatch.setattr(ClientModule, "Engine"  , Engine)
+    monkeypatch.setattr(ClientModule, "Store"   , Store)
+    monkeypatch.setattr(ClientModule, "Module"  , Module)
+    monkeypatch.setattr(ClientModule, "Instance", Instance)
+
+    Payload = {
+        "challenge" : "abc",
+        "salt"      : "s",
+        "expire_at" : 1,
+        "difficulty": 2
+    }
+
+    Client = object.__new__(DeepSeekWebClient)
+    Answer = Client._PoWChallengeSolver(Payload)
+
+    assert Answer == 42
+    assert Calls['store_engine'] is Calls['module_engine']
+
+def PoWResponseBuildTest():
+    Payload = {
+        "algorithm"  : "DeepSeekHashV1",
+        "challenge"  : "abc",
+        "difficulty" : 144000,
+        "salt"       : "salt",
+        "signature"  : "sig",
+        "expire_at"  : 1234567890
+    }
+
+    Client  = object.__new__(DeepSeekWebClient)
+    Encoded = Client._BuildPowResponse(Payload, "/api/v0/chat/completion", 42.0)
+    Raw     = base64.b64decode(Encoded).decode("utf-8")
+    Parsed  = json.loads(Raw)
+
+    assert Parsed == {**Payload, "answer": 42, "target_path": "/api/v0/chat/completion"}
+    assert '"answer":42' in Raw and '"answer":42.0' not in Raw
 
 if __name__ == "__main__":
     print("Running tests for Utils...")
     ResponseIDTest()
     print("Running tests for DeepSeekStreamParser...")
     SSEParserTest()
+    print("Running tests for DeepSeekWebClient...")
+    with MonkeyPatch.context() as monkeypatch:
+        WASMTIMEEnginePipelineTest(monkeypatch)
+    PoWResponseBuildTest()
     print("Running tests for ToolPrompt...")
     ToolParserTest()
     StreamingToolParserTest()

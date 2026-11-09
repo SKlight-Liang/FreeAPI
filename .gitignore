@@ -223,7 +223,7 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Data directory
-.data/
+.Data/
 
 # VSCode Settings
 .vscode/

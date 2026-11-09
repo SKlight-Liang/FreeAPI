@@ -1,7 +1,8 @@
-
 import json
 import base64
 import struct
+import asyncio
+import aiohttp
 import importlib
 
 from pytest import MonkeyPatch
@@ -168,6 +169,30 @@ def PoWResponseBuildTest():
     assert Parsed == {**Payload, "answer": 42, "target_path": "/api/v0/chat/completion"}
     assert '"answer":42' in Raw and '"answer":42.0' not in Raw
 
+def ChatCompletionsTest():
+    async def _Run():
+        Client = DeepSeekWebClient({
+            "cookie"    : "x",
+            "userAgent" : "ua"
+        })
+
+        try:
+            assert "Content-Type" not in Client.Http.headers
+
+            Form = aiohttp.FormData()
+            Form.add_field("file", b"hello", filename = "a.txt", content_type = "text/plain")
+            Payload = Form()
+
+            ContentType = str(Payload.headers["Content-Type"])
+
+            assert ContentType.startswith("multipart/form-data;")
+            assert "boundary=" in ContentType
+
+        finally:
+            await Client.Close()
+
+    asyncio.run(_Run())
+
 if __name__ == "__main__":
     print("Running tests for Utils...")
     ResponseIDTest()
@@ -177,6 +202,7 @@ if __name__ == "__main__":
     with MonkeyPatch.context() as monkeypatch:
         WASMTIMEEnginePipelineTest(monkeypatch)
     PoWResponseBuildTest()
+    ChatCompletionsTest()
     print("Running tests for ToolPrompt...")
     ToolParserTest()
     StreamingToolParserTest()

@@ -22,11 +22,15 @@ Constructs a "Response ID" based on the given Session ID and optional Message ID
 Parses a "Response ID" into its Session ID and Message ID components.
 - EstimateTokenUsage(TotalTokens, Input, Output):
 Estimate input/output token allocation based on total tokens and the input/output ratio.
+- DefaultDataDir():
+Returns the default user data directory path for the application.
 '''
 
 import base64
 import pathlib
 import mimetypes
+
+from platformdirs import user_data_path
 
 # Detect the MIME type based on the provided data/path and optional filename
 def DetectMIMEType(DataorPath, Filename = None):
@@ -130,3 +134,12 @@ def EstimateTokenUsage(TotalTokens, Input, Output):
         'output_tokens': TotalTokens - InputTokens,
         'total_tokens': TotalTokens
     }
+
+# Resolve the persistent user-specific application data directory.
+def DefaultDataDir():
+    # Use the platformdirs library to get the user-specific data directory for the application
+    return user_data_path(
+        appname   = "FreeAPI",
+        appauthor = False,
+        roaming   = False
+    )

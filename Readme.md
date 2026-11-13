@@ -10,7 +10,7 @@
 
 [Overview](#overview) · [Getting started](#getting-started) · [Architecture](#architecture) · [Capabilities](#capabilities) · [License](#license)
 
-Version: **Gamma 0.1.2**(Developing)
+Version: **Gamma 0.2.0**(Developing)
 
 </div>
 
@@ -71,16 +71,42 @@ That's it! Python will take care of installing the required packages.
 
 ### Run
 
+#### CLI (Browser Mode)
+
 Now for the fun part! Start FreeAPI with:
 
 ```bash
-FreeAPI-Chat -i -d -p PORT
+FreeAPI-ChatB -i -d -p PORT
 ```
 
 FreeAPI will launch its command-line entry point.
 
 > [!NOTE]
 > The `-i` flag enables interactive mode, allowing you to chat with the AI in multiple rounds. The `-d` flag means that the chat session will be deleted after completion. The `-p PORT` flag specifies the port number for the browser's CDP debugger (default is 9222). If you meet any issues, you can try changing the port number to avoid conflicts.
+
+#### CLI (Headless Mode)
+
+FreeAPI now supports a direct web-client workflow! Before starting a chat, obtain your DeepSeek authentication credentials using the browser-assisted authentication command:
+
+```bash
+FreeAPI-Auth -p PORT
+```
+
+Follow the browser login process when prompted. FreeAPI will capture the required credentials and save them locally for subsequent requests. You generally only need to repeat this step when your credentials expire or become invalid.
+
+> [!NOTE]
+> Same as above, `FreeAPI-Auth` also uses Chromium-based browser automation, so you can change the port number with the `-p PORT` flag if you encounter any conflicts.
+
+Once authentication is complete, launch the terminal chat client:
+
+```bash
+FreeAPI-Chat -i -d -t -s
+```
+
+This command starts FreeAPI in headless mode, allowing you to chat with the AI without opening a browser window. After that, you can chat with AI happily!
+
+> [!NOTE]
+> The `-i` flag enables interactive mode and the `-d` flag means that the chat session will be deleted after completion. In addition, we also provide two optional flags to help you catch a glimpse of how AI works behind the scenes. The `-t` flag enables the display of tool calls, while the `-s` flag enables much more details about the search process, including the search results and some other things. You can use these flags to gain a deeper understanding of how AI generates responses.
 
 ### What's Next?
 
@@ -93,7 +119,7 @@ If you are curious about how FreeAPI works under the hood, here's a brief overvi
 The architecture is designed to be modular and extensible, allowing for easy integration of new features and services.
 
 <p align="center">
-  <img src="./ReadmeSrc/Architecture.svg"
+  <img src="./ReadmeSrc/Gamma 0.1.2 Architecture.svg"
        width="580"
        alt="FreeAPI Architecture">
 </p>
@@ -111,18 +137,47 @@ In this diagram, you can see how requests are parsed and sent to the browser for
 
 </details>
 
+<br>
+
+FreeAPI now also includes a direct HTTP-based client for DeepSeek's web endpoints. Instead of driving the chat page for every message, the client will submit authenticated requests directly to DeepSeek's backend. This approach is more efficient and powerful because we could get more information from the response, such as tool calls and search results. 
+
+<p align="center">
+  <img src="./ReadmeSrc/Gamma 0.2.0 Architecture.svg"
+       width="580"
+       alt="FreeAPI Architecture">
+</p>
+
+In this version, we have improved the functionality of the stream interpreter, allowing it to handle more complex scenarios, such as tool calls and search results. Of course, there are both advantages and disadvantages. The code length of the stream interpreter skyrocketed from 389 lines to 741 lines, causing us to faint on the spot as soon as we saw this interpreter. (This is definitely not a reason for laziness, meow!)
+
+<details>
+<summary><strong>Follow a request through the system </strong></summary>
+
+1. **Acquire credentials.** `DeepSeekAuth.py` uses a Chromium session to capture the authenticated cookie, bearer token, and user agent; the credentials can be saved for subsequent runs.
+2. **Start the terminal client.** `ChatTerminal.py` loads the credentials and initializes `DeepSeekWebClient.py`, which uses `aiohttp` for authenticated requests instead of automating the chat page.
+3. **Prepare the conversation.** `DeepSeekWebClient.py` creates or selects a chat session and handles any required file uploads and processing-status checks.
+4. **Submit the message.** The HTTP client obtains and processes the server-issued challenge when required, then sends the chat request to the DeepSeek web endpoint.
+5. **Decode the stream.** `SSE.py` frames incoming SSE events, and `DeepSeekStreamParser.py` reconstructs incremental reasoning, response text, tool-status snapshots, metadata, and references.
+6. **Present the result.** `ChatTerminal.py` displays updates and resolved citation details, optionally records diagnostic logs, and manages session cleanup when requested.
+
+</details>
+
 ## Capabilities
 
 | Area | Implementation | What it provides |
 | :-- | :-- | :-- |
 | Browser integration | `Browser.py`, `DeepSeekBrowserClient.py` | CDP-based browser launch and Playwright-backed interaction with DeepSeek Chat. |
-| Conversation lifecycle | `DeepSeekBrowserClient.py` | Session switching, session deletion, and serialized browser operations. |
-| Streaming | `SSE.py`, `DeepSeekStreamParser.py` | Incremental SSE parsing, state updates, text deltas, and response metadata. |
-| Request / response translation | `Normalize.py` | Conversion for OpenAI-style Chat Completions and Responses data structures. |
-| Tool calls | `ToolPrompt.py` | Tool instructions and parsing of complete or streamed tool-call markup. |
-| Attachments | `DeepSeekBrowserClient.py`, `Normalize.py`, `Utils.py` | File upload handling, content decoding, and MIME detection. |
+| Direct HTTP integration (new) | `DeepSeekWebClient.py` | Authenticated asynchronous requests to DeepSeek web endpoints using `aiohttp`, without browser-driven chat submission. |
+| Credential acquisition (new) | `DeepSeekAuth.py` | Browser-assisted login, capture of cookies, bearer token and user agent, and local credential loading/saving. |
+| Conversation lifecycle | `DeepSeekBrowserClient.py`, `DeepSeekWebClient.py` | Browser-side session switching/deletion and HTTP-side session creation, deletion, history and session-list operations. |
+| Streaming | `SSE.py`, `DeepSeekStreamParser.py` | Incremental SSE parsing, state reconstruction, reasoning/response deltas, tool snapshots, metadata and references. |
+| Request / response translation | `Normalize.py` | Conversion for OpenAI-style Chat Completions and Responses data structures in the existing normalization workflow. |
+| Tool calls and tool visibility | `ToolPrompt.py`, `DeepSeekStreamParser.py`, `ChatTerminal.py` | Tool-call markup handling in the normalized workflow, plus live tool-status snapshots in the terminal workflow. |
+| Attachments | `DeepSeekBrowserClient.py`, `DeepSeekWebClient.py`, `Normalize.py`, `Utils.py` | Browser-backed uploads, HTTP multipart uploads with processing-status polling, and input decoding/MIME helpers. |
+| Challenge handling (new) | `DeepSeekWebClient.py`, `Resources/DeepSeekHashV1.wasm` | Processing of server-issued proof-of-work challenges for applicable HTTP operations. |
+| Reference tracking (new) | `DeepSeekStreamParser.py`, `ChatTerminal.py` | Preservation of reference bindings, extraction of citation metadata and terminal display of resolved URLs/titles. |
 | Model configuration | `Models.py` | Configuration for `deepseek` and `deepseek(faster)` modes. |
-| CLI workflow | `ChatBrowser.py` | A browser-backed chat entry point, including optional interactive conversation. |
+| CLI workflows | `ChatBrowser.py`, `ChatTerminal.py` | Browser-backed interactive chat and credential-based HTTP terminal chat, with optional debugging and session cleanup. |
+| Diagnostics (new) | `ChatTerminal.py` | Optional raw SSE event logs, stream diagnostics and tool/search visibility. |
 
 ## License
 

@@ -13,11 +13,14 @@ Sadly, this module is not cross-platform. It is only tested on Windows 10/11 wit
 Hope that in the future, we can make it cross-platform and much more convenient to use.
 After all, the execution speed of `playwright install chromium` is really TOO SLOW !!!!!!
 
+Heavy Update(2026.11.13)! Now we have made this module cross-platform, 
+and it can now be used on Windows, macOS, and Linux!
+
 Functions Table:
 - DefaultCDPURL(CDPPort = 9222):
 Return the CDP debugging address for the specified port.
 - DefaultUserDataDir():
-Return the default user data directory path for the browser profile: .data/profile-9222
+Return the default user data directory path for the browser profile: .Data/Profile-UserData
 - WaitforDebuggerURL(CDPURL = None, Timeout = 20):
 Poll the browser's version endpoint until a WebSocket debugger URL is found or the timeout expires.
 - LaunchChromeforDebugging(CDPPort = 9222, UserDataDir = None, Headless = False, Detached = False):
@@ -36,6 +39,8 @@ import subprocess
 import urllib.request
 
 from pathlib import Path
+
+from .Utils import *
 
 # Default CDP remote debugging port for Chromium-based browsers.
 DEFAULT_CDP_PORT = 9222
@@ -91,7 +96,7 @@ def DefaultCDPURL(CDPPort = DEFAULT_CDP_PORT):
 
 # Return the default local directory for the browser's user data profile.
 def DefaultUserDataDir():
-    return str(Path.cwd() / ".Data" / f"Profile-UserData")
+    return str(DefaultDataDir() / f"Profile-UserData")
 
 # Polling waiting for the browser's debugging endpoint to be ready.
 async def WaitforDebuggerURL(CDPURL = None, Timeout = 20):

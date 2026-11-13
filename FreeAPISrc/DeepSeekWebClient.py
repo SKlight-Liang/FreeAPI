@@ -323,7 +323,7 @@ class DeepSeekWebClient:
             "prompt"           : Params["message"],
             "ref_file_ids"     : Params.get("file_ids", []),
             "search_enabled"   : Params.get("search_enabled", True),
-            "thinking_enabled" : Params.get("thinking_enabled", False),
+            "thinking_enabled" : Params.get("thinking_enabled", True),
         }
 
         # OPTIONAL: If verbose logging is enabled, print a message 

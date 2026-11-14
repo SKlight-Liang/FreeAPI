@@ -21,16 +21,18 @@ import urllib.request
 from pathlib import Path
 from playwright.async_api import async_playwright
 
+from .Utils import *
+
 # Default CDP remote debugging port for Chromium-based browsers.
 DEFAULT_PORT = 9222
 
 # Return the default credential file path relative to the current working directory.
 def DefaultCredentialPath():
-    return str(Path.cwd() / ".Data" / "DeepSeekCredentials.json")
+    return str(DefaultDataDir() / "DeepSeekCredentials.json")
 
 # Return the default user data directory path for the browser profile.
 def DefaultUserDataDir():
-    return str(Path.cwd() / ".Data" / "Profile-UserData")
+    return str(DefaultDataDir() / "Profile-UserData")
 
 # Save the provided credentials as a JSON file at the specified path.
 def SaveCredentials(Credentials, PathName):

@@ -223,12 +223,12 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Data directory
-.data/
+.Data/
 
 # VSCode Settings
 .vscode/
 
 # PR/ISSUE/COMMENT templates
 PR.md
-ISSUR.md
+ISSUE.md
 COMMENT.md

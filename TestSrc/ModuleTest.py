@@ -12,6 +12,7 @@ from FreeAPISrc.Normalize import *
 from FreeAPISrc.ToolPrompt import *
 from FreeAPISrc.DeepSeekStreamParser import *
 from FreeAPISrc.DeepSeekWebClient import *
+from FreeAPISrc.Server import *
 
 # Tests for utility functions in the Utils module.
 def ResponseIDTest():
@@ -193,6 +194,35 @@ def ChatCompletionsTest():
 
     asyncio.run(_Run())
 
+# Test for the components in the server module.
+def ResponseSessionQueueTest():
+    async def _Run():
+        Queue = ResponseSessionQueue()
+        Order = []
+
+        async def One(State):
+            Order.append(("one-start", State["last"]))
+            await asyncio.sleep(0.1)
+            State["last"] = 11
+            Order.append(("one-end", 11))
+
+        async def Two(State):
+            Order.append(("two", State["last"]))
+            State["last"] = 12
+
+        await asyncio.gather(
+            Queue.Run("1234567890", One),
+            Queue.Run("1234567890", Two)
+        )
+
+        assert Order == [
+            ("one-start", None), 
+            ("one-end"  , 11), 
+            ("two"      , 11)
+        ]
+
+    asyncio.run(_Run())
+    
 if __name__ == "__main__":
     print("Running tests for Utils...")
     ResponseIDTest()
@@ -209,4 +239,6 @@ if __name__ == "__main__":
     print("Running tests for Normalize...")
     CompletionsNormalizeTest()
     ResponseNormalizeTest()
+    print("Running tests for Server...")
+    ResponseSessionQueueTest()
     print("All tests passed!")

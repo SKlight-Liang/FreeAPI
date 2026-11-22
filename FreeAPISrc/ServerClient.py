@@ -123,7 +123,7 @@ It manages the lifecycle of the browser and the underlying API client.
 
 Functions Table(Public):
 - Create(UserDataDir): Start browser debugging, connect and create a BrowserServerClient instance.
-- ChatCompletion(Params): Initiate a chat completion request through the browser client.
+- ChatCompletions(Params): Initiate a chat completion request through the browser client.
 - UploadFile(Source, Filename, ModelType): Read the source byte stream and upload it.
 - DeleteSession(SessionID): Delete a specified session by its session ID.
 - Close(): Close the browser and Playwright instances, and terminate the browser process.
@@ -165,7 +165,7 @@ class BrowserServerClient:
 
     # Delegate chat completion requests to the underlying browser client directly.
     # This method just forwards the parameters to the DeepSeekBrowserClient.
-    async def ChatCompletion(self, Params):
+    async def ChatCompletions(self, Params):
         return await self.Client.ChatCompletions(Params)
     
     # Upload a file to DeepSeek through the browser client. The method first resolves 

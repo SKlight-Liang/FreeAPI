@@ -8,9 +8,9 @@
 
 `Browser automation` · `Streaming SSE` · `Tool calling` · `Session management`
 
-[Overview](#overview) · [Getting started](#getting-started) · [Architecture](#architecture) · [Capabilities](#capabilities) · [License](#license)
+[Overview](#overview) · [Getting started](#getting-started) · [License](#license)
 
-Version: **Gamma 0.2.0**(Developing)
+Version: **Beta 0.3.0**(Developing)
 
 </div>
 
@@ -108,77 +108,89 @@ This command starts FreeAPI in headless mode, allowing you to chat with the AI w
 > [!NOTE]
 > The `-i` flag enables interactive mode and the `-d` flag means that the chat session will be deleted after completion. In addition, we also provide two optional flags to help you catch a glimpse of how AI works behind the scenes. The `-t` flag enables the display of tool calls, while the `-s` flag enables much more details about the search process, including the search results and some other things. You can use these flags to gain a deeper understanding of how AI generates responses.
 
+#### Server(Completion Request)
+
+We have launched a brand new mode! Now you can use FreeAPI as an official API server to handle completion requests. Same as above, we also support both browser mode and headless mode. Therefore, you need to determine whether to run the authentication command first based on your mode of choice. After that, you can start the server with the following command:
+
+```bash
+FreeAPI-Server -p PORT
+```
+
+Then FreeAPI will start a local server to handle completion requests. 
+
+> [!NOTE]
+> The `-p PORT` flag specifies the port number for the server (default is 10086). You can change the port number to avoid conflicts if needed. The server will listen for incoming requests and respond with the AI-generated completions. Additionally, you can use the optional `--browser` flag to enable browser mode, which allows FreeAPI to interact with web-based AI services through a browser interface. If you don't use this flag, FreeAPI will run in headless mode by default.
+
+After the server is running, you can visit the following URL in your web browser to check whether the server is running properly:
+
+```
+http://localhost:PORT/v1/models
+```
+
+If you could see a list of available models, congratulations! FreeAPI is running successfully. You can now send completion requests to the server using the appropriate API endpoints:
+
+```
+http://localhost:PORT/v1/chat/completions
+```
+
 ### What's Next?
 
 Once FreeAPI is running, you're ready to explore how to connect web-based AI services to your own applications and workflows.
 
-## Architecture
+Here we will provide an example of how to send requests to FreeAPI and receive responses. You can use any programming language or tool that supports HTTP requests, such as Python, JavaScript, or Postman.
 
-If you are curious about how FreeAPI works under the hood, here's a brief overview of its architecture. Of course, we are still working on this project, so this section just provides a high-level view of the current design.
+```python
+import json
+import requests
 
-The architecture is designed to be modular and extensible, allowing for easy integration of new features and services.
+# Set the completion endpoint URL
+URL = "http://localhost:PORT/v1/chat/completions"
 
-<p align="center">
-  <img src="./ReadmeSrc/Gamma 0.1.2 Architecture.svg"
-       width="580"
-       alt="FreeAPI Architecture">
-</p>
+# Define the request payload
+Messages = [{
+    "role"    : "user",
+    "content" : [{
+        "type": "text",
+        # The text content of the message
+        "text": "Hello, FreeAPI! Can you tell me a joke?"
+    }, {
+        "type": "file",
+        "file": {
+            # The base64-encoded content of the file
+            # or you can use the ABSOLUTE PATH of the file.
+            "file_data": "SSBhbSBsaXR0bGUgYmx1ZSB3aGFsZS4=",
+            "filename" : "Who am I.txt"
+        }
+    }, {
+        "type"     : "image_url",
+        "image_url": {
+            # The ABSOLUTE PATH or URL of the image file.
+            "url": r"\ReadmeSrc\Gamma 0.1.2 Architecture.svg"
+        }
+    }]
+}]
 
-In this diagram, you can see how requests are parsed and sent to the browser for processing, and how response streams will be intercepted and transformed into an OpenAI-style format. This is friendly for your applications or workflows to consume. YUMMY!
+# Define the tool call payload
+Tools    = []
 
-<details>
-<summary><strong>Follow a request through the system</strong></summary>
+# Define the request payload
+Payload = {
+    "model"      : "deepseek",
+    "messages"   : Messages,
+    "tools"      : Tools,
+    "tool_choice": "auto"
+}
 
-1. **Normalize input.** `NormalizeCompletions` or `NormalizeResponses` converts supported OpenAI-style payloads into an internal representation.
-2. **Prepare the browser.** `Browser.py` locates and launches a Chromium-based browser with CDP enabled; the client attaches through Playwright.
-3. **Interact with DeepSeek Chat.** `DeepSeekBrowserClient` manages page access, session switching, file uploads, and chat submissions while observing network responses.
-4. **Decode streaming updates.** `SSEParser` frames events, while `DeepSeekStateDecoder` applies incremental updates to reconstruct the message state.
-5. **Recover structured output.** `Normalize.py` transforms the resulting text and parsed tool calls into OpenAI-style message or response objects.
+# Send the request to FreeAPI
+Response = requests.post(URL, json = Payload)
+# Parse the response
+ResponseBody = Response.json()
+Message      = ResponseBody["choices"][0]["message"]
+ToolCalls    = Message.get("tool_calls", [])
+```
 
-</details>
-
-<br>
-
-FreeAPI now also includes a direct HTTP-based client for DeepSeek's web endpoints. Instead of driving the chat page for every message, the client will submit authenticated requests directly to DeepSeek's backend. This approach is more efficient and powerful because we could get more information from the response, such as tool calls and search results. 
-
-<p align="center">
-  <img src="./ReadmeSrc/Gamma 0.2.0 Architecture.svg"
-       width="580"
-       alt="FreeAPI Architecture">
-</p>
-
-In this version, we have improved the functionality of the stream interpreter, allowing it to handle more complex scenarios, such as tool calls and search results. Of course, there are both advantages and disadvantages. The code length of the stream interpreter skyrocketed from 389 lines to 741 lines, causing us to faint on the spot as soon as we saw this interpreter. (This is definitely not a reason for laziness, meow!)
-
-<details>
-<summary><strong>Follow a request through the system </strong></summary>
-
-1. **Acquire credentials.** `DeepSeekAuth.py` uses a Chromium session to capture the authenticated cookie, bearer token, and user agent; the credentials can be saved for subsequent runs.
-2. **Start the terminal client.** `ChatTerminal.py` loads the credentials and initializes `DeepSeekWebClient.py`, which uses `aiohttp` for authenticated requests instead of automating the chat page.
-3. **Prepare the conversation.** `DeepSeekWebClient.py` creates or selects a chat session and handles any required file uploads and processing-status checks.
-4. **Submit the message.** The HTTP client obtains and processes the server-issued challenge when required, then sends the chat request to the DeepSeek web endpoint.
-5. **Decode the stream.** `SSE.py` frames incoming SSE events, and `DeepSeekStreamParser.py` reconstructs incremental reasoning, response text, tool-status snapshots, metadata, and references.
-6. **Present the result.** `ChatTerminal.py` displays updates and resolved citation details, optionally records diagnostic logs, and manages session cleanup when requested.
-
-</details>
-
-## Capabilities
-
-| Area | Implementation | What it provides |
-| :-- | :-- | :-- |
-| Browser integration | `Browser.py`, `DeepSeekBrowserClient.py` | CDP-based browser launch and Playwright-backed interaction with DeepSeek Chat. |
-| Direct HTTP integration (new) | `DeepSeekWebClient.py` | Authenticated asynchronous requests to DeepSeek web endpoints using `aiohttp`, without browser-driven chat submission. |
-| Credential acquisition (new) | `DeepSeekAuth.py` | Browser-assisted login, capture of cookies, bearer token and user agent, and local credential loading/saving. |
-| Conversation lifecycle | `DeepSeekBrowserClient.py`, `DeepSeekWebClient.py` | Browser-side session switching/deletion and HTTP-side session creation, deletion, history and session-list operations. |
-| Streaming | `SSE.py`, `DeepSeekStreamParser.py` | Incremental SSE parsing, state reconstruction, reasoning/response deltas, tool snapshots, metadata and references. |
-| Request / response translation | `Normalize.py` | Conversion for OpenAI-style Chat Completions and Responses data structures in the existing normalization workflow. |
-| Tool calls and tool visibility | `ToolPrompt.py`, `DeepSeekStreamParser.py`, `ChatTerminal.py` | Tool-call markup handling in the normalized workflow, plus live tool-status snapshots in the terminal workflow. |
-| Attachments | `DeepSeekBrowserClient.py`, `DeepSeekWebClient.py`, `Normalize.py`, `Utils.py` | Browser-backed uploads, HTTP multipart uploads with processing-status polling, and input decoding/MIME helpers. |
-| Challenge handling (new) | `DeepSeekWebClient.py`, `Resources/DeepSeekHashV1.wasm` | Processing of server-issued proof-of-work challenges for applicable HTTP operations. |
-| Reference tracking (new) | `DeepSeekStreamParser.py`, `ChatTerminal.py` | Preservation of reference bindings, extraction of citation metadata and terminal display of resolved URLs/titles. |
-| Model configuration | `Models.py` | Configuration for `deepseek` and `deepseek(faster)` modes. |
-| CLI workflows | `ChatBrowser.py`, `ChatTerminal.py` | Browser-backed interactive chat and credential-based HTTP terminal chat, with optional debugging and session cleanup. |
-| Diagnostics (new) | `ChatTerminal.py` | Optional raw SSE event logs, stream diagnostics and tool/search visibility. |
-
+> [!WARNING]
+> Unlike the official API, FreeAPI only accepts absolute paths for file and image inputs. Please ensure that you provide the correct absolute path to the files you want to include in your requests. More details about how to use FreeAPI can be found in the [test code](./TestSrc/CompletionsTest.py).
 ## License
 
 FreeAPI is an open-source software released under the [MIT License](./LICENSE). You're welcome to use, modify, and share it! Of course, nothing could be better if you could give us a star on GitHub and advertise it to your friends!

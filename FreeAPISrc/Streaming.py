@@ -20,6 +20,10 @@ reasoning output items in the Response events.
 Functions Table:
 - _CompletionChunk(RequestID, Model, Delta, Finish = None, Usage = None):
 Construct a single chat.completion.chunk incremental block based on the provided parameters.
+- CompletionEvents(Stream, RequestID, Model, InputLen, UseTool = False):
+Convert raw DeepSeek stream messages into chat.completion.chunk sequences.
+- ResponseEvents(Stream, SessionID, Model, InputLen, UseTool = False):
+Convert raw DeepSeek stream messages into response API style event streams.
 '''
 
 import time

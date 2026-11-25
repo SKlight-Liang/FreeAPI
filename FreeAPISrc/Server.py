@@ -617,6 +617,309 @@ class App:
             except Exception:
                 pass
 
+    # Process a non streaming response request, including normalization, file uploads, execution by the 
+    # session lock serialization, parsing the backend stream, and packaging the final result to be returned 
+    # to the client. This method handles the entire lifecycle of a response request, ensuring that requests 
+    # for the same session are serialized and that the final result is properly formatted for the client.
+    async def _ResponseHandler(self, Request):
+        # Normalize the incoming request data
+        NormalizedData, Choice = NormalizeResponses(Request)
+        # Determine whether to parse tool calls based on the choice and the tools provided in the request.
+        ToolMatch              = WhethertoParseToolCall(Choice, Request.get("tools"))
+        # Validate that the normalized message is not empty, raising a ValueError if it is.
+        if not NormalizedData["message"].strip():
+            raise ValueError("Request must include at least one non-empty message.")
+        # Upload any necessary files from the request data to the backend client, 
+        # obtaining their corresponding file IDs.
+        FileIDs   = await UploadAttachmentsResponses(Request, self.Client, NormalizedData["model_type"])
+
+        # Obtain the session ID from the request data.
+        SessionID = NormalizedData.get("session_id")
+        # Acquire a lock for the session to ensure that requests for the same session are serialized.
+        # If the session ID is not provided, use a temporary lock to allow concurrent processing of requests.
+        Lock      = self.Locks.setdefault(SessionID, asyncio.Lock()) if SessionID else asyncio.Lock()
+
+        async with Lock:
+            # Determine the parent message ID to use for the request, 
+            # either from the last message ID for the session or from the request data.
+            if NormalizedData.get("session_id"):
+                ParentMessageID = self.LastMessageID.get(SessionID, NormalizedData.get("parent_message_id"))
+            else:
+                ParentMessageID = NormalizedData.get("parent_message_id")
+
+            # Invoke the backend client's chat completion method with the normalized data, session ID,
+            # parent message ID, and file IDs. The backend client will return a session ID and a 
+            # response body stream.
+            SessionID, ResponseBody = await self.Client.ChatCompletion({
+                **NormalizedData,
+                "session_id"        : SessionID,
+                "parent_message_id" : ParentMessageID,
+                "file_ids"          : FileIDs
+            })
+            # Parse the response body stream to extract the final result
+            ParsedResult = await ParseStream(ResponseBody)
+            # Update the last message ID for the session with the message ID from the parsed result.
+            self.LastMessageID[SessionID] = ParsedResult['message_id']
+            
+            # Construct the response ID using the session ID and the message ID from the parsed result.
+            ResponseID = ConstructResponseID(SessionID, ParsedResult['message_id'])
+            # Construct the output for the response, including the text, reasoning content, and any tool calls.
+            Output     = InternalToResponses(ParsedResult["text"], ResponseID, ToolMatch)
+            # If there is any reasoning content in the parsed result, 
+            # include it in the output as a separate event.
+            if ParsedResult["thinking"].strip():
+                Output.append({
+                    "type"    : "reasoning",
+                    "content" : [{
+                        "type"        : "output_text",
+                        "text"        : ParsedResult["thinking"].strip(),
+                        "annotations" : []
+                    }],
+                    "role"    : "assistant",
+                    "id"      : f"thinking_{ResponseID}",
+                    "status"  : "completed"
+                })
+
+            # Estimate the token usage based on the accumulated token usage, input length, and output length.
+            TokenUsage = EstimateTokenUsage(
+                ParsedResult["accumulated_token_usage"], 
+                len(NormalizedData["message"]), 
+                len(ParsedResult["text"]) + len(ParsedResult["thinking"])
+            )
+            # Construct the final result to be returned to the client, 
+            # including the response ID, model, output, and token usage.
+            Result = {
+                "id"        : ResponseID,
+                "object"    : "response",
+                "created_at": int(time.time()),
+                "status"    : "completed",
+                "model"     : NormalizedData["model"],
+                "output"    : Output,
+                "usage"     : TokenUsage
+            }
+            # Return the final result as a JSON response to the client.
+            return Result
+
+    # POST /v1/responses
+    # Handle response requests, supporting both API mode streaming, general streaming and non-streaming responses.
+    # Among them, the general streaming is based on the playback of the non-streaming response result. This method 
+    # normalizes the request data, uploads any necessary files, and invokes the backend client's chat completion 
+    # method. It then streams or packages the results and returns them to the client.
+    async def Responses(self, Request):
+        # Parse the incoming request data as JSON.
+        RawData = await Request.json()
+
+        # For API mode streaming requests, just use the backend client's streaming response events to 
+        # stream the response back to the client directly. This allows for real-time streaming of 
+        # response events from the backend client to the client.
+        if RawData.get("stream") and self.Client.Mode == "API":
+            # Normalize the request data
+            NormalizedData, Choice = NormalizeResponses(RawData)
+            # Validate that the normalized message is not empty, raising a ValueError if it is.
+            if not NormalizedData["message"].strip():
+                raise ValueError("Request must include at least one non-empty message.")
+
+            # Upload any necessary files from the request data to the backend client,
+            # obtaining their corresponding file IDs.
+            FileIDs   = await UploadAttachmentsResponses(RawData, self.Client, NormalizedData["model_type"])
+
+            # Obtain the session ID from the normalized data, which will be used to manage session state.
+            SessionID = NormalizedData.get("session_id")
+            # Acquire a lock for the session to ensure that requests for the same session are serialized.
+            Lock      = self.Locks.setdefault(SessionID, asyncio.Lock()) if SessionID else asyncio.Lock()
+
+            async with Lock:
+                # Determine the parent message ID to use for the request, 
+                # either from the last message ID for the session or from the normalized data.
+                if SessionID:
+                    ParentMessageID = self.LastMessageID.get(SessionID, NormalizedData.get("parent_message_id"))
+                else:
+                    ParentMessageID = NormalizedData.get("parent_message_id")
+
+                # Invoke the backend client's chat completion method with the normalized data, session ID,
+                # parent message ID, and file IDs. The backend client will return a session ID and a
+                # response body stream.
+                SessionID, ResponseBody = await self.Client.ChatCompletion({
+                    **NormalizedData,
+                    "session_id"        : SessionID,
+                    "parent_message_id" : ParentMessageID,
+                    "file_ids"          : FileIDs
+                })
+
+                # Prepare a streaming response with appropriate headers for Server-Sent Events (SSE).
+                StreamingResponse = web.StreamResponse(headers = {
+                    "Content-Type"                : "text/event-stream; charset=utf-8",
+                    "Cache-Control"               : "no-cache, no-transform",
+                    "Connection"                  : "keep-alive",
+                    "Access-Control-Allow-Origin" : "*",
+                    "Access-Control-Allow-Headers": "content-type, authorization, x-requested-with",
+                    "Access-Control-Allow-Methods": "GET,POST,OPTIONS"
+                })
+                # Prepare the streaming response to be sent to the client.
+                await StreamingResponse.prepare(Request)
+
+                # Stream response events from the backend client and send them to the client as JSON-formatted messages.
+                LastEvent = None
+                # Iterate over the response events from the backend client
+                async for Event in ResponseEvents(
+                    ResponseBody, SessionID, NormalizedData["model"], len(NormalizedData["message"]),
+                    WhethertoParseToolCall(Choice, RawData.get("tools"))
+                ):
+                    # If the event indicates that the response is completed, store it as the last event.
+                    if Event.get("type") == "response.completed":
+                        LastEvent = Event
+                    # Send each event as a JSON-formatted message to the client.
+                    await StreamingResponse.write(f"data: {json.dumps(Event, ensure_ascii = False)}\n\n".encode())
+
+                # After streaming all events, check if there was a completed response event received.
+                if LastEvent:
+                    try:
+                        # If there was a completed response event, parse its response ID to obtain the message ID.
+                        ResponseID = LastEvent["response"]["id"]
+                        self.LastMessageID[SessionID] = int(ResponseID.rsplit('|', 1)[-1])
+                    except Exception:
+                        # If an exception occurs during parsing, ignore it to avoid disrupting the streaming process.
+                        pass
+
+                # After streaming all events, send a final [Done] message to indicate the end of the stream.
+                await StreamingResponse.write(b"data: [DONE]\n\n")
+
+                # Return the streaming response to the client.
+                return StreamingResponse
+
+        # For non-API mode streaming requests, we will get the complete response result first, 
+        # and then stream the response events back to the client.
+        Result = await self._ResponseHandler(RawData)
+        # For streaming requests, prepare a streaming response with appropriate headers and stream the
+        # response events from the complete result back to the client. Each event is sent as a 
+        # JSON-formatted message, and a final [Done] message will be sent to indicate the end of the stream.
+        if RawData.get("stream"):
+            # Prepare a streaming response with appropriate headers for Server-Sent Events (SSE).
+            StreamingResponse = web.StreamResponse(headers = {
+                "Content-Type"                : "text/event-stream; charset=utf-8",
+                "Cache-Control"               : "no-cache, no-transform",
+                "Connection"                  : "keep-alive",
+                "Access-Control-Allow-Origin" : "*",
+                "Access-Control-Allow-Headers": "content-type, authorization, x-requested-with",
+                "Access-Control-Allow-Methods": "GET,POST,OPTIONS"
+            })
+            # Prepare the streaming response to be sent to the client.
+            await StreamingResponse.prepare(Request)
+            # Initialize a sequence number for the response events to maintain order.
+            
+            SequenceNumber = 1
+            # Send a response.created event to indicate that the response has been created and is in progress
+            # with the initial result, including the status, output, and usage.
+            CreatedResponse = {
+                **Result, 
+                "status": "in_progress", 
+                "output": [], 
+                "usage" : None 
+            }
+            await StreamingResponse.write(f"data: {json.dumps({
+                'type'           : 'response.created', 
+                'response'       : CreatedResponse, 
+                'sequence_number': SequenceNumber
+            }, ensure_ascii = False)}\n\n".encode())
+            # Increment the sequence number for the next event.
+            SequenceNumber += 1
+
+            # Iterate over the output items in the result and send response.output_item.added events for each item.
+            for Index, Item in enumerate(Result["output"]):
+                # Send a response.output_item.added event for each output item
+                await StreamingResponse.write(f"data: {json.dumps({
+                    'type'           : 'response.output_item.added', 
+                    'output_index'   : Index,
+                    'item'           : { **Item, 'status': 'in_progress' },
+                    'sequence_number': SequenceNumber
+                }, ensure_ascii = False)}\n\n".encode())
+                # Increment the sequence number for the next event.
+                SequenceNumber += 1
+
+                # For message or reasoning items, send response.output_text.delta events for each content piece.
+                if Item["type"] in ("message", "reasoning"):
+                    for ContentIndex, ContentPiece in enumerate(Item.get("content", [])):
+                        await StreamingResponse.write(f"data: {json.dumps({
+                            'type'           : 'response.output_text.delta', 
+                            'item_id'        : Item["id"],
+                            'output_index'   : Index,
+                            'content_index'  : ContentIndex,
+                            'delta'          : ContentPiece.get("text", ""),
+                            'sequence_number': SequenceNumber
+                        }, ensure_ascii = False)}\n\n".encode())
+                        # Increment the sequence number for the next event.
+                        SequenceNumber += 1
+                # For function call items, send a response.function_call_arguments.done event with the function call details.
+                elif Item["type"] == "function_call":
+                    await StreamingResponse.write(f"data: {json.dumps({
+                        'type'           : 'response.function_call_arguments.done', 
+                        'output_index'   : Index,
+                        'item_id'        : Item["id"],
+                        'name'           : Item["name"],
+                        'arguments'      : Item["arguments"],
+                        'sequence_number': SequenceNumber
+                    }, ensure_ascii = False)}\n\n".encode())
+                    # Increment the sequence number for the next event.
+                    SequenceNumber += 1
+
+                # Send a response.output_item.done event to indicate that the output item has been fully processed.
+                await StreamingResponse.write(f"data: {json.dumps({
+                    'type'           : 'response.output_item.done', 
+                    'output_index'   : Index,
+                    'item'           : Item,
+                    'sequence_number': SequenceNumber
+                }, ensure_ascii = False)}\n\n".encode())
+                # Increment the sequence number for the next event.
+                SequenceNumber += 1
+
+            # After streaming all output items, send a response.completed event with the final result and a [DONE] message.
+            await StreamingResponse.write(f"data: {json.dumps({
+                'type'           : 'response.completed', 
+                'response'       : Result,
+                'sequence_number': SequenceNumber
+            }, ensure_ascii = False)}\n\ndata: [DONE]\n\n".encode())
+            # Return the streaming response to the client.
+            return StreamingResponse
+
+        # For non-streaming requests, package the final result into a JSON response and return it to the client.
+        return web.json_response(Result)
+
+    # GET /v1/responses (WebSocket)
+    # Asynchronously handle WebSocket connections for response requests, managing incoming messages,
+    # processing them, and sending back responses. This method establishes a WebSocket connection,
+    # creates a WebSocket session manager, and listens for incoming messages. It processes each message
+    # asynchronously, ensuring that requests for the same session are serialized, and sends back the
+    # corresponding responses to the client. It also handles cleanup of the WebSocket session when the
+    # connection is closed, ensuring that any outstanding tasks are completed and resources are released.
+    async def ResponsesWebSocket(self, Request):
+        # Create a WebSocket response object to handle the WebSocket connection.
+        WebSocket = web.WebSocketResponse()
+        # Prepare the WebSocket connection for communication with the client.
+        await WebSocket.prepare(Request)
+        # Create a WebSocket session manager to handle incoming messages and manage session state.
+        Manager   = WebSocketSessionManager(WebSocket, self.Client)
+        # Initialize a set to hold tasks for processing incoming messages.
+        Tasks     = set()
+
+        try:
+            # Asynchronously listen for incoming messages from the WebSocket connection.
+            async for Message in WebSocket:
+                # If the message is a text message, create a task to handle it using the session manager.
+                if Message.type == WSMsgType.TEXT:
+                    Task = asyncio.create_task(Manager.HandleRequest(Message.data))
+                    # Add the task to the set of tasks for tracking and management.
+                    Tasks.add(Task)
+                    # When the task is done, remove it from the set of tasks to avoid memory leaks.
+                    Task.add_done_callback(Tasks.discard)
+        finally:
+            # When the WebSocket connection is closed, ensure that all outstanding tasks are completed.
+            if Tasks:
+                await asyncio.gather(*Tasks, return_exceptions = True)
+            # Clean up the WebSocket session by releasing any active sessions and removing queued state.
+            await Manager.Cleanup()
+
+        return WebSocket
+
 # Create the aiohttp web application, configure middleware, endpoints, and application cleanup.
 # This function initializes the web application, sets up the necessary middleware for IP 
 # allowlisting and CORS, defines the endpoints for health checks, model listings, chat completions, 
@@ -650,6 +953,7 @@ async def CreateApp(Client):
     # monitoring the health of the application. It can be called by external tools or services 
     # to verify that the server is running and responsive.
     async def HealthHandler(Request):
+        print(f"FreeAPI > {Request.remote}: Health check received")
         return web.json_response({ "ok": True })
 
     # COMPLETIONS HANDLER
@@ -658,7 +962,17 @@ async def CreateApp(Client):
     # logic for processing the request, including normalization, file uploads, and invoking the
     # backend client's chat completion method. The response is then returned to the client.
     async def CompletionsHandler(Request):
+        print(f"FreeAPI > {Request.remote}: Chat completion request received")
         return await ErrorHandler(Request, AppInstance.ChatCompletions)
+
+    # RESPONSES HANDLER
+    # This handler processes response requests sent to the /v1/responses endpoint. It delegates
+    # the request to the AppInstance's Responses method, which handles the logic for processing
+    # the request, including normalization, file uploads, and invoking the backend client's chat
+    # completion method. The response is then returned to the client.
+    async def ResponsesHandler(Request):
+        print(f"FreeAPI > {Request.remote}: Response request received")
+        return await ErrorHandler(Request, AppInstance.Responses)
 
     # APPLICATION CLEANUP HOOKS
     # This function is registered as a cleanup hook for the application, which will be called
@@ -672,10 +986,12 @@ async def CreateApp(Client):
     # which defines the endpoints and their corresponding handlers.
     Application.router.add_route("OPTIONS", "/{tail:.*}", OptionsHandler)
 
-    Application.router.add_get("/health"   , HealthHandler)
-    Application.router.add_get("/v1/models", AppInstance.Models)
+    Application.router.add_get("/health"      , HealthHandler)
+    Application.router.add_get("/v1/models"   , AppInstance.Models)
+    Application.router.add_get("/v1/responses", AppInstance.ResponsesWebSocket)
    
     Application.router.add_post("/v1/chat/completions", CompletionsHandler)
+    Application.router.add_post("/v1/responses"       , ResponsesHandler)
 
     # Register the cleanup function to be called when the application is shutting down,
     # ensuring that the backend client is properly closed and resources are released.

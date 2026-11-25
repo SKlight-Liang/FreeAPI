@@ -119,8 +119,8 @@ def ParseResponseID(Value):
 # based on the total number of tokens and the ratio of input/output characters.
 def EstimateTokenUsage(TotalTokens, Input, Output):
     # Roughly convert the number of input and output characters to the number of tokens by dividing them by 4
-    InputWeight  = len(Input) >> 2
-    OutputWeight = len(Output) >> 2
+    InputWeight  = len(Input) >> 2  if isinstance(Input, str) else Input
+    OutputWeight = len(Output) >> 2 if isinstance(Output, str) else Output
     TotalWeight  = InputWeight + OutputWeight
 
     # Calculate the estimated number of input tokens
@@ -130,9 +130,9 @@ def EstimateTokenUsage(TotalTokens, Input, Output):
         InputTokens = 0
 
     return {
-        'input_tokens': InputTokens,
+        'input_tokens' : InputTokens,
         'output_tokens': TotalTokens - InputTokens,
-        'total_tokens': TotalTokens
+        'total_tokens' : TotalTokens
     }
 
 # Resolve the persistent user-specific application data directory.
